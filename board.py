@@ -1,6 +1,7 @@
 from enum import IntEnum, Enum
 
 from typing import NamedTuple
+from dataclasses import dataclass
 
 
 class Color(IntEnum):
@@ -14,16 +15,21 @@ class Color(IntEnum):
             return self.WHITE
 
 
-class Piece(Enum):
-    def __init__(self, color: Color):
-        self.color = color
-
+class PieceKind(Enum):
     PAWN = 1
     KNIGHT = 2
     BISHOP = 3
     ROOK = 4
     QUEEN = 5
     KING = 6
+
+
+from typing import NamedTuple
+
+
+class Piece(NamedTuple):
+    kind: PieceKind
+    color: Color
 
 
 class Square(NamedTuple):
@@ -49,3 +55,22 @@ class Square(NamedTuple):
     @property
     def board_index(self) -> int:
         return 8 * self.rank + self.file
+
+
+@dataclass
+class Board:
+    width: int
+    height: int
+    __squares: list[Piece]
+
+    def __post_init__(self):
+        __squares = []
+
+    def __getitem__(self, square: Square) -> Piece:
+        return self.__squares[square.board_index]
+
+    def __setitem__(self, key: Square, value: Piece) -> None:
+        self.__squares[key.board_index] = value
+
+    def __initialize_board(self):
+        self.__squares[0:8] = [Piece(PieceKind.PAWN, Color.WHITE)] * 8
