@@ -5,3 +5,13 @@ description = "Small chess engine, fully hand-typed."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+    ".",
+]

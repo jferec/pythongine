@@ -114,7 +114,6 @@ class Square(IntEnum):
         return self.value % 8
 
 
-
 @dataclass
 class Board:
     width: int = 8
@@ -143,13 +142,13 @@ class Board:
             PieceKind.ROOK,
         ]
 
-        self._squares[Square.A1:Square.A2] = [
+        self._squares[Square.A1 : Square.A2] = [
             Piece(kind, Color.WHITE) for kind in back_rank
         ]
-        self._squares[Square.A2:Square.A3] = [
+        self._squares[Square.A2 : Square.A3] = [
             Piece(PieceKind.PAWN, Color.WHITE) for _ in range(8)
         ]
-        self._squares[Square.A7:Square.A8] = [
+        self._squares[Square.A7 : Square.A8] = [
             Piece(PieceKind.PAWN, Color.BLACK) for _ in range(8)
         ]
-        self._squares[Square.A8:] = [Piece(kind, Color.BLACK) for kind in back_rank]
+        self._squares[Square.A8 :] = [Piece(kind, Color.BLACK) for kind in back_rank]
