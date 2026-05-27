@@ -1,7 +1,6 @@
+from dataclasses import dataclass, field
 from enum import IntEnum, Enum
-
 from typing import NamedTuple
-from dataclasses import dataclass
 
 
 class Color(IntEnum):
@@ -24,53 +23,133 @@ class PieceKind(Enum):
     KING = 6
 
 
-from typing import NamedTuple
-
-
 class Piece(NamedTuple):
     kind: PieceKind
     color: Color
 
 
-class Square(NamedTuple):
+class Square(IntEnum):
     """
     Represents a square on a chessboard.
 
-
     Attributes:
-        rank: Row index, 0-7 (0 is white's back rank).
-        file: Column index, 0-7 (0 is the a-file).
+        value: Board index, 0-63.
     """
 
-    rank: int
-    file: int
-
-    def __new__(cls, rank: int, file: int):
-        if not (0 <= rank < 8):
-            raise ValueError(f"rank out of bounds: {rank}")
-        if not (0 <= file < 8):
-            raise ValueError(f"file out of bounds: {file}")
-        return super().__new__(cls, (rank, file))
+    A1 = 0
+    B1 = 1
+    C1 = 2
+    D1 = 3
+    E1 = 4
+    F1 = 5
+    G1 = 6
+    H1 = 7
+    A2 = 8
+    B2 = 9
+    C2 = 10
+    D2 = 11
+    E2 = 12
+    F2 = 13
+    G2 = 14
+    H2 = 15
+    A3 = 16
+    B3 = 17
+    C3 = 18
+    D3 = 19
+    E3 = 20
+    F3 = 21
+    G3 = 22
+    H3 = 23
+    A4 = 24
+    B4 = 25
+    C4 = 26
+    D4 = 27
+    E4 = 28
+    F4 = 29
+    G4 = 30
+    H4 = 31
+    A5 = 32
+    B5 = 33
+    C5 = 34
+    D5 = 35
+    E5 = 36
+    F5 = 37
+    G5 = 38
+    H5 = 39
+    A6 = 40
+    B6 = 41
+    C6 = 42
+    D6 = 43
+    E6 = 44
+    F6 = 45
+    G6 = 46
+    H6 = 47
+    A7 = 48
+    B7 = 49
+    C7 = 50
+    D7 = 51
+    E7 = 52
+    F7 = 53
+    G7 = 54
+    H7 = 55
+    A8 = 56
+    B8 = 57
+    C8 = 58
+    D8 = 59
+    E8 = 60
+    F8 = 61
+    G8 = 62
+    H8 = 63
 
     @property
     def board_index(self) -> int:
-        return 8 * self.rank + self.file
+        return self.value
+
+    @property
+    def rank(self) -> int:
+        return self.value // 8
+
+    @property
+    def file(self) -> int:
+        return self.value % 8
+
 
 
 @dataclass
 class Board:
-    width: int
-    height: int
-    __squares: list[Piece]
+    width: int = 8
+    height: int = 8
+    _squares: list[Piece | None] = field(init=False, repr=False)
 
     def __post_init__(self):
-        __squares = []
+        self._squares = [None] * (self.width * self.height)
+        self.__initialize_board()
 
-    def __getitem__(self, square: Square) -> Piece:
-        return self.__squares[square.board_index]
+    def __getitem__(self, square: Square) -> Piece | None:
+        return self._squares[square.board_index]
 
-    def __setitem__(self, key: Square, value: Piece) -> None:
-        self.__squares[key.board_index] = value
+    def __setitem__(self, square: Square, value: Piece | None) -> None:
+        self._squares[square.board_index] = value
 
-    def __initialize_board(self):
-        self.__squares[0:8] = [Piece(PieceKind.PAWN, Color.WHITE)] * 8
+    def __initialize_board(self) -> None:
+        back_rank = [
+            PieceKind.ROOK,
+            PieceKind.KNIGHT,
+            PieceKind.BISHOP,
+            PieceKind.QUEEN,
+            PieceKind.KING,
+            PieceKind.BISHOP,
+            PieceKind.KNIGHT,
+            PieceKind.ROOK,
+        ]
+
+        self._squares[Square.A1:Square.A2] = [
+            Piece(kind, Color.WHITE) for kind in back_rank
+        ]
+        self._squares[Square.A2:Square.A3] = [
+            Piece(PieceKind.PAWN, Color.WHITE) for _ in range(8)
+        ]
+        self._squares[Square.A7:Square.A8] = [
+            Piece(PieceKind.PAWN, Color.BLACK) for _ in range(8)
+        ]
+        self._squares[Square.A8:] = [Piece(kind, Color.BLACK) for kind in back_rank]
