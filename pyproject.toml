@@ -4,11 +4,16 @@ version = "0.1.0"
 description = "Small chess engine, fully hand-typed."
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "uvicorn[standard]>=0.34.0",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "httpx>=0.28.0",
 ]
 
 [tool.pytest.ini_options]
