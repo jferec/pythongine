@@ -111,3 +111,19 @@ class Square(IntEnum):
     @property
     def file(self) -> int:
         return self.value % 8
+
+
+def square_to_name(square: Square) -> str:
+    """Return the algebraic name of ``square`` (e.g. ``Square.E4`` -> ``"e4"``)."""
+    return f"{chr(ord('a') + square.file)}{square.rank + 1}"
+
+
+def square_from_name(name: str) -> Square:
+    """Return the ``Square`` for an algebraic name such as ``"e4"``."""
+    if len(name) != 2:
+        raise ValueError(f"Invalid square name: {name!r}")
+    file = ord(name[0]) - ord("a")
+    rank = int(name[1]) - 1
+    if not (0 <= file < 8 and 0 <= rank < 8):
+        raise ValueError(f"Invalid square name: {name!r}")
+    return Square(rank * 8 + file)

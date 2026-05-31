@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from bitboard import KING_ATTACKS, KNIGHT_ATTACKS, iter_squares, square_bb
 from king_safety import KingSafety
 from move import Move, MoveFlag
-from pieces import Color, Piece, PieceKind, Square
+from pieces import Color, Piece, PieceKind, Square, square_from_name, square_to_name
 
 # Re-exported for callers that import from board.
 __all__ = [
@@ -76,6 +76,97 @@ _ROOK_DELTAS = ((0, 1), (0, -1), (1, 0), (-1, 0))
 _CASTLE_KINGSIDE_DESTINATIONS = square_bb(Square.G1) | square_bb(Square.G8)
 _CASTLE_QUEENSIDE_DESTINATIONS = square_bb(Square.C1) | square_bb(Square.C8)
 
+_CASTLING_FROM_FEN = {
+    "K": CASTLE_WHITE_KINGSIDE,
+    "Q": CASTLE_WHITE_QUEENSIDE,
+    "k": CASTLE_BLACK_KINGSIDE,
+    "q": CASTLE_BLACK_QUEENSIDE,
+}
+_CASTLING_TO_FEN = (
+    (CASTLE_WHITE_KINGSIDE, "K"),
+    (CASTLE_WHITE_QUEENSIDE, "Q"),
+    (CASTLE_BLACK_KINGSIDE, "k"),
+    (CASTLE_BLACK_QUEENSIDE, "q"),
+)
+
+
+def _parse_castling(field: str) -> int:
+    """Return castling-rights bitmask from a FEN castling field."""
+    if field == "-":
+        return 0
+    rights = 0
+    for character in field:
+        if character not in _CASTLING_FROM_FEN:
+            raise ValueError(f"Invalid castling field: {field!r}")
+        rights |= _CASTLING_FROM_FEN[character]
+    return rights
+
+
+def _format_castling(rights: int) -> str:
+    """Return the FEN castling field for ``rights``."""
+    if rights == 0:
+        return "-"
+    return "".join(label for bit, label in _CASTLING_TO_FEN if rights & bit)
+
+
+def _parse_en_passant(field: str) -> Square | None:
+    """Return the en passant target square from a FEN field."""
+    if field == "-":
+        return None
+    square = square_from_name(field)
+    if square.rank not in (2, 5):
+        raise ValueError(f"Invalid en passant square: {field!r}")
+    return square
+
+
+def _format_en_passant(square: Square | None) -> str:
+    """Return the FEN en passant field for ``square``."""
+    if square is None:
+        return "-"
+    return square_to_name(square)
+
+
+def _parse_placement(placement: str, board: "Board") -> None:
+    """Place pieces on ``board`` from the FEN piece-placement field."""
+    rank = 7
+    file = 0
+    for character in placement:
+        if character == "/":
+            rank -= 1
+            file = 0
+            continue
+        if character.isdigit():
+            file += int(character)
+            continue
+        if file >= 8 or rank < 0:
+            raise ValueError(f"Invalid piece placement: {placement!r}")
+        kind, color = _FEN_TO_PIECE[character]
+        board[Square(rank * 8 + file)] = Piece(kind, color)
+        file += 1
+    if rank != 0 or file != 8:
+        raise ValueError(f"Invalid piece placement: {placement!r}")
+
+
+def _format_placement(board: "Board") -> str:
+    """Return the FEN piece-placement field for ``board``."""
+    fen_ranks: list[str] = []
+    for rank in range(7, -1, -1):
+        empty_run = 0
+        rank_chars: list[str] = []
+        for file in range(8):
+            piece = board[Square(rank * 8 + file)]
+            if piece is None:
+                empty_run += 1
+                continue
+            if empty_run:
+                rank_chars.append(str(empty_run))
+                empty_run = 0
+            rank_chars.append(_PIECE_TO_FEN[(piece.kind, piece.color)])
+        if empty_run:
+            rank_chars.append(str(empty_run))
+        fen_ranks.append("".join(rank_chars))
+    return "/".join(fen_ranks)
+
 
 @dataclass
 class _UndoState:
@@ -87,6 +178,8 @@ class _UndoState:
     captured_square: Square | None
     previous_castling_rights: int
     previous_en_passant_target: Square | None
+    previous_halfmove_clock: int
+    previous_fullmove_number: int
     rook_from: Square | None = None
     rook_to: Square | None = None
 
@@ -109,6 +202,12 @@ class Board:
 
     en_passant_target: Square | None = None
     """Square behind a pawn that just moved two ranks; ``None`` if unavailable."""
+
+    halfmove_clock: int = 0
+    """Half-moves since the last pawn advance or capture (50-move rule)."""
+
+    fullmove_number: int = 1
+    """Full-move count; incremented after each black half-move."""
 
     move_history: list[Move] = field(default_factory=list)
     """Played moves in order; populated by ``make_move`` (not ``generate_moves``)."""
@@ -158,6 +257,47 @@ class Board:
         self._squares[Square.A8 :] = [Piece(kind, Color.BLACK) for kind in back_rank]
 
     @classmethod
+    def from_fen(cls, fen: str) -> "Board":
+        """Build a board from standard FEN (1–6 fields).
+
+        Example: ``rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1``.
+        Omitted trailing fields default to ``-`` for castling/en passant and
+        ``0``/``1`` for the halfmove and fullmove clocks.
+        """
+        fields = fen.strip().split()
+        if not 1 <= len(fields) <= 6:
+            raise ValueError(f"FEN must contain 1–6 fields, got {len(fields)}")
+
+        board = cls(setup_standard_position=False)
+        _parse_placement(fields[0], board)
+
+        if len(fields) == 1:
+            board.side_to_move = Color.WHITE
+            return board
+
+        active_color = fields[1]
+        if active_color not in ("w", "b"):
+            raise ValueError(f"Invalid active color: {active_color!r}")
+        board.side_to_move = Color.WHITE if active_color == "w" else Color.BLACK
+
+        if len(fields) > 2:
+            board.castling_rights = _parse_castling(fields[2])
+        if len(fields) > 3:
+            board.en_passant_target = _parse_en_passant(fields[3])
+        if len(fields) > 4:
+            halfmove = int(fields[4])
+            if halfmove < 0:
+                raise ValueError(f"Invalid halfmove clock: {halfmove}")
+            board.halfmove_clock = halfmove
+        if len(fields) > 5:
+            fullmove = int(fields[5])
+            if fullmove < 1:
+                raise ValueError(f"Invalid fullmove number: {fullmove}")
+            board.fullmove_number = fullmove
+
+        return board
+
+    @classmethod
     def from_simple_fen(cls, fen: str) -> "Board":
         """Build a board from simplified FEN (piece placement and side to move only).
 
@@ -167,44 +307,23 @@ class Board:
         placement, active_color = fen.strip().split()
         board = cls(setup_standard_position=False)
         board.side_to_move = Color.WHITE if active_color == "w" else Color.BLACK
-
-        rank = 7
-        file = 0
-        for character in placement:
-            if character == "/":
-                rank -= 1
-                file = 0
-                continue
-            if character.isdigit():
-                file += int(character)
-                continue
-            kind, color = _FEN_TO_PIECE[character]
-            board[Square(rank * 8 + file)] = Piece(kind, color)
-            file += 1
-
+        _parse_placement(placement, board)
         return board
+
+    def to_fen(self) -> str:
+        """Encode the position as standard 6-field FEN."""
+        active = "w" if self.side_to_move == Color.WHITE else "b"
+        return (
+            f"{_format_placement(self)} {active} "
+            f"{_format_castling(self.castling_rights)} "
+            f"{_format_en_passant(self.en_passant_target)} "
+            f"{self.halfmove_clock} {self.fullmove_number}"
+        )
 
     def to_simple_fen(self) -> str:
         """Encode piece placement and ``side_to_move`` as simplified FEN."""
-        fen_ranks: list[str] = []
-        for rank in range(7, -1, -1):
-            empty_run = 0
-            rank_chars: list[str] = []
-            for file in range(8):
-                piece = self[Square(rank * 8 + file)]
-                if piece is None:
-                    empty_run += 1
-                    continue
-                if empty_run:
-                    rank_chars.append(str(empty_run))
-                    empty_run = 0
-                rank_chars.append(_PIECE_TO_FEN[(piece.kind, piece.color)])
-            if empty_run:
-                rank_chars.append(str(empty_run))
-            fen_ranks.append("".join(rank_chars))
-
         active = "w" if self.side_to_move == Color.WHITE else "b"
-        return f"{'/'.join(fen_ranks)} {active}"
+        return f"{_format_placement(self)} {active}"
 
     def generate_moves(self) -> list[Move]:
         """Return all legal moves for ``side_to_move``.
@@ -253,6 +372,8 @@ class Board:
         rook_to: Square | None = None
         previous_castling_rights = self.castling_rights
         previous_en_passant_target = self.en_passant_target
+        previous_halfmove_clock = self.halfmove_clock
+        previous_fullmove_number = self.fullmove_number
 
         if move.flags == MoveFlag.EN_PASSANT:
             captured_square = self._en_passant_captured_square(move)
@@ -281,6 +402,15 @@ class Board:
         self._update_castling_rights(move, piece)
         self._update_en_passant_target(move, piece, color)
 
+        is_pawn_or_capture = (
+            piece.kind == PieceKind.PAWN
+            or captured_piece is not None
+            or move.flags == MoveFlag.EN_PASSANT
+        )
+        self.halfmove_clock = 0 if is_pawn_or_capture else self.halfmove_clock + 1
+        if color == Color.BLACK:
+            self.fullmove_number += 1
+
         self._undo_stack.append(
             _UndoState(
                 move=move,
@@ -289,6 +419,8 @@ class Board:
                 captured_square=captured_square,
                 previous_castling_rights=previous_castling_rights,
                 previous_en_passant_target=previous_en_passant_target,
+                previous_halfmove_clock=previous_halfmove_clock,
+                previous_fullmove_number=previous_fullmove_number,
                 rook_from=rook_from,
                 rook_to=rook_to,
             )
@@ -306,6 +438,8 @@ class Board:
         self.side_to_move = undo.moving_color
         self.castling_rights = undo.previous_castling_rights
         self.en_passant_target = undo.previous_en_passant_target
+        self.halfmove_clock = undo.previous_halfmove_clock
+        self.fullmove_number = undo.previous_fullmove_number
 
         move = undo.move
         piece = self[move.to_square]
