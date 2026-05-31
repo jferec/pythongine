@@ -1,7 +1,7 @@
 from board import Board, MoveFlag
 from move import Move
 from pieces import PieceKind, Square
-from san import match_move
+from san import match_move, move_to_san
 
 
 def test_pawn_push() -> None:
@@ -56,3 +56,25 @@ def test_strips_check_and_mate_suffix() -> None:
     board = Board.from_fen("7k1/6Q1/8/8/8/8/8/7K w - - 0 1")
     move = match_move(board, "Qf7#")
     assert move.to_square == Square.F7
+
+
+def test_move_to_san_round_trip() -> None:
+    board = Board()
+    for san in ("e4", "Nf6", "Bc4"):
+        move = match_move(board, san)
+        assert move_to_san(board, move).rstrip("#+") == san.rstrip("#+")
+        board.make_move(move)
+
+    castle_board = Board.from_fen(
+        "r1bqkbnr/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
+    )
+    castle_san = "O-O"
+    castle_move = match_move(castle_board, castle_san)
+    assert move_to_san(castle_board, castle_move).rstrip("#+") == castle_san
+
+
+def test_move_to_san_disambiguation() -> None:
+    board = Board.from_fen("4k3/8/8/8/2N1N3/8/8/4K3 w - - 0 1")
+    move = match_move(board, "Ncd6")
+    assert move_to_san(board, move).rstrip("#+") == "Ncd6"
+

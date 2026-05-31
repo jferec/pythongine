@@ -1,8 +1,10 @@
 import re
 
 from board import Board
+from eval import is_checkmate
+from king_safety import KingSafety
 from move import Move, MoveFlag
-from pieces import PieceKind, Square, square_from_name
+from pieces import PieceKind, Square, square_from_name, square_to_name
 
 _PIECE_CHARS = {
     "N": PieceKind.KNIGHT,
@@ -115,6 +117,100 @@ def match_move(board: Board, san: str) -> Move:
     if len(candidates) > 1:
         raise AmbiguousMoveError(f"SAN {san!r} is ambiguous: {candidates!r}")
     return candidates[0]
+
+
+_PIECE_TO_CHAR = {
+    PieceKind.KNIGHT: "N",
+    PieceKind.BISHOP: "B",
+    PieceKind.ROOK: "R",
+    PieceKind.QUEEN: "Q",
+    PieceKind.KING: "K",
+}
+
+_PROMOTION_TO_CHAR = {
+    PieceKind.QUEEN: "Q",
+    PieceKind.ROOK: "R",
+    PieceKind.BISHOP: "B",
+    PieceKind.KNIGHT: "N",
+}
+
+
+def move_to_san(board: Board, move: Move) -> str:
+    """Return Standard Algebraic Notation for ``move`` on ``board``."""
+    if move.flags == MoveFlag.CASTLE_KINGSIDE:
+        return _with_check_suffix(board, move, "O-O")
+    if move.flags == MoveFlag.CASTLE_QUEENSIDE:
+        return _with_check_suffix(board, move, "O-O-O")
+
+    piece = board[move.from_square]
+    if piece is None:
+        raise IllegalMoveError(f"No piece on {move.from_square}")
+
+    to_name = square_to_name(move.to_square)
+    is_capture = _move_is_capture(move, board)
+
+    if piece.kind == PieceKind.PAWN:
+        if is_capture:
+            san = f"{square_to_name(move.from_square)[0]}x{to_name}"
+        else:
+            san = to_name
+        if move.flags == MoveFlag.PROMOTION and move.promotion is not None:
+            san += f"={_PROMOTION_TO_CHAR[move.promotion]}"
+        return _with_check_suffix(board, move, san)
+
+    letter = _PIECE_TO_CHAR[piece.kind]
+    san = f"{letter}{_disambiguation(board, move, piece.kind)}"
+    if is_capture:
+        san += "x"
+    san += to_name
+    return _with_check_suffix(board, move, san)
+
+
+def _disambiguation(board: Board, move: Move, kind: PieceKind) -> str:
+    """Return file/rank prefix when another piece of ``kind`` can reach ``move.to_square``."""
+    from_square = move.from_square
+    ambiguators: list[Square] = []
+    for candidate in board.generate_moves():
+        if candidate.to_square != move.to_square:
+            continue
+        if candidate.from_square == from_square:
+            continue
+        piece = board[candidate.from_square]
+        if piece is not None and piece.kind == kind:
+            ambiguators.append(candidate.from_square)
+    if not ambiguators:
+        return ""
+
+    if not any(square.file == from_square.file for square in ambiguators):
+        return chr(ord("a") + from_square.file)
+    if not any(square.rank == from_square.rank for square in ambiguators):
+        return str(from_square.rank + 1)
+    return square_to_name(from_square)
+
+
+def _with_check_suffix(board: Board, move: Move, san: str) -> str:
+    board.make_move(move)
+    try:
+        opponent = board.side_to_move
+        if not _has_king(board, opponent):
+            return f"{san}#"
+        if is_checkmate(board):
+            return f"{san}#"
+        if KingSafety.for_color(board, opponent).in_check:
+            return f"{san}+"
+        return san
+    finally:
+        board.unmake_move()
+
+
+def _has_king(board: Board, color) -> bool:
+    from pieces import PieceKind
+
+    for square in Square:
+        piece = board[square]
+        if piece is not None and piece.kind == PieceKind.KING and piece.color == color:
+            return True
+    return False
 
 
 def _match_castle(board: Board, flag: MoveFlag, san: str) -> Move:
