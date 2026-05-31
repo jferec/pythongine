@@ -82,10 +82,7 @@ class Board:
     """
 
     width: int = 8
-    """Board width in squares (always 8 for standard chess)."""
-
     height: int = 8
-    """Board height in squares (always 8 for standard chess)."""
 
     setup_standard_position: bool = True
     """When True, ``__post_init__`` fills the board with the usual start array."""
@@ -280,13 +277,17 @@ class Board:
             case PieceKind.KING:
                 return self._king_moves_bb(square, piece.color)
 
-    def _all_occupied_bb(self) -> int:
+    def all_occupied_bb(self) -> int:
         """Bitboard of all squares that contain any piece."""
         occupied = 0
         for square in Square:
             if self[square] is not None:
                 occupied |= square_bb(square)
         return occupied
+
+    def _all_occupied_bb(self) -> int:
+        """Alias for ``all_occupied_bb`` (used internally by move generation)."""
+        return self.all_occupied_bb()
 
     def _occupied_bb(self, color: Color) -> int:
         """Bitboard of squares occupied by pieces of ``color``."""
