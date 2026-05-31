@@ -168,3 +168,12 @@ def analyze(
     total_ms = int((time.monotonic() - start) * 1000)
     progress(f"Analysis finished after {total_ms}ms ({len(updates)} depths)")
     return updates
+
+
+def best_move(board: Board, *, deadline: float) -> ScoredMove | None:
+    """Return the best root move found before ``deadline``, or ``None`` if no search completed."""
+    updates = analyze(board, deadline=deadline)
+    if not updates:
+        return None
+    top = updates[-1].top_moves
+    return top[0] if top else None

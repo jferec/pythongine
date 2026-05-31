@@ -20,6 +20,13 @@ from api.games import (
     loaded_game_to_dict,
     parse_lichess_game_id,
 )
+from api.play import (
+    ApplyMoveRequest,
+    EngineMoveRequest,
+    apply_move,
+    engine_move_async,
+    legal_moves,
+)
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
@@ -97,6 +104,21 @@ async def analyze_position(
 async def cancel_analysis(body: CancelRequest) -> dict:
     cancelled = session_manager.cancel(body.session)
     return {"session": body.session, "cancelled": cancelled}
+
+
+@app.get("/api/play/legal-moves")
+async def get_legal_moves(fen: str) -> dict:
+    return legal_moves(fen)
+
+
+@app.post("/api/play/apply-move")
+async def post_apply_move(body: ApplyMoveRequest) -> dict:
+    return apply_move(body)
+
+
+@app.post("/api/play/engine-move")
+async def post_engine_move(body: EngineMoveRequest) -> dict:
+    return await engine_move_async(body)
 
 
 def _mount_frontend() -> None:

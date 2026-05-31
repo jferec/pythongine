@@ -119,6 +119,39 @@ def match_move(board: Board, san: str) -> Move:
     return candidates[0]
 
 
+def match_drag(
+    board: Board,
+    from_square: str,
+    to_square: str,
+    *,
+    promotion: PieceKind | None = None,
+) -> Move:
+    """Return the legal ``Move`` for a drag from ``from_square`` to ``to_square``."""
+    from_sq = square_from_name(from_square)
+    to_sq = square_from_name(to_square)
+    candidates: list[Move] = []
+    for move in board.generate_moves():
+        if move.from_square != from_sq or move.to_square != to_sq:
+            continue
+        if move.flags == MoveFlag.PROMOTION:
+            if promotion is not None and move.promotion != promotion:
+                continue
+        candidates.append(move)
+    if not candidates:
+        raise IllegalMoveError(
+            f"No legal move from {from_square} to {to_square}"
+        )
+    if len(candidates) == 1:
+        return candidates[0]
+    if promotion is not None:
+        raise AmbiguousMoveError(
+            f"Drag {from_square}{to_square} is ambiguous: {candidates!r}"
+        )
+    raise AmbiguousMoveError(
+        f"Promotion required for {from_square}{to_square}"
+    )
+
+
 _PIECE_TO_CHAR = {
     PieceKind.KNIGHT: "N",
     PieceKind.BISHOP: "B",
