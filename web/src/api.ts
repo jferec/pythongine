@@ -34,7 +34,9 @@ export function openAnalysisStream(
   fen: string,
   session: string,
   onUpdate: (update: AnalysisUpdate) => void,
-  onDone: () => void,
+  onLog: (message: string) => void,
+  onTick: (elapsedMs: number) => void,
+  onDone: (elapsedMs: number) => void,
   onError: (message: string) => void,
 ): EventSource {
   const source = new EventSource(
@@ -45,14 +47,25 @@ export function openAnalysisStream(
     onUpdate(JSON.parse(event.data) as AnalysisUpdate)
   })
 
-  source.addEventListener('done', () => {
+  source.addEventListener('log', (event) => {
+    const body = JSON.parse(event.data) as { message: string }
+    onLog(body.message)
+  })
+
+  source.addEventListener('tick', (event) => {
+    const body = JSON.parse(event.data) as { elapsed_ms: number }
+    onTick(body.elapsed_ms)
+  })
+
+  source.addEventListener('done', (event) => {
+    const body = JSON.parse(event.data) as { elapsed_ms: number }
     source.close()
-    onDone()
+    onDone(body.elapsed_ms)
   })
 
   source.addEventListener('cancelled', () => {
     source.close()
-    onDone()
+    onDone(0)
   })
 
   source.addEventListener('error', () => {

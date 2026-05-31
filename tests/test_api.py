@@ -65,7 +65,9 @@ def test_load_lichess_game(mock_fetch: AsyncMock, client: TestClient) -> None:
 
 @patch("api.analysis.analyze")
 def test_analyze_sse(mock_analyze, client: TestClient) -> None:
-    def fake_analyze(board, *, deadline, on_update=None):
+    def fake_analyze(board, *, deadline, on_update=None, on_progress=None):
+        if on_progress is not None:
+            on_progress("mock start")
         update = AnalysisUpdate(
             depth=1,
             static_eval=42,
@@ -98,16 +100,18 @@ def test_analyze_sse(mock_analyze, client: TestClient) -> None:
                     events.append((event_name, json.loads("\n".join(data_lines))))
                     data_lines = []
                 if events:
-                    break
+                    update_events = [event for event in events if event[0] == "update"]
+                    if update_events:
+                        break
                 continue
             if line.startswith("event:"):
                 event_name = line.split(":", 1)[1].strip()
             elif line.startswith("data:"):
                 data_lines.append(line.split(":", 1)[1].strip())
 
-    assert events
-    assert events[0][0] == "update"
-    assert events[0][1]["top_moves"][0]["san"] == "e4"
+    update_events = [event for event in events if event[0] == "update"]
+    assert update_events
+    assert update_events[0][1]["top_moves"][0]["san"] == "e4"
 
 
 def test_cancel_analysis(client: TestClient) -> None:
