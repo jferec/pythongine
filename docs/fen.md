@@ -246,3 +246,12 @@ no manual assignment of `en_passant_target` is needed.
 
 5. **Halfmove vs fullmove.** Halfmove resets on pawn/capture moves; fullmove
    increments only after Black's half-move in `make_move`.
+
+---
+
+## Game replay tests
+
+PGN fixtures in `tests/assets/games/` pair each SAN move with a `{ [%fen "..."] }`
+comment. `game_replay.replay_game` loads the game, matches SAN via `san.match_move`,
+applies `make_move`, and asserts `board.to_fen()` equals the comment. With
+`verify_unmake=True`, each step also runs `unmake_move` and re-applies the move.

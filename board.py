@@ -525,7 +525,14 @@ class Board:
 
         if piece.kind == PieceKind.KING:
             castle = self._legal_castle_destinations(from_square, piece.color, safety)
-            non_castle = pseudo & ~(_CASTLE_KINGSIDE_DESTINATIONS | _CASTLE_QUEENSIDE_DESTINATIONS)
+            if (
+                from_square == Square.E1 and piece.color == Color.WHITE
+            ) or (from_square == Square.E8 and piece.color == Color.BLACK):
+                non_castle = pseudo & ~(
+                    _CASTLE_KINGSIDE_DESTINATIONS | _CASTLE_QUEENSIDE_DESTINATIONS
+                )
+            else:
+                non_castle = pseudo
             return (non_castle & ~safety.danger) | castle
 
         if safety.pinned & square_bb(from_square):
