@@ -1,3 +1,5 @@
+import pytest
+
 from bitboard import KNIGHT_ATTACKS, popcount, square_bb
 from board import Board, Color, Piece, PieceKind, Square
 from king_safety import ALL_SQUARES, KingSafety
@@ -93,3 +95,62 @@ def test_danger_includes_attacked_king_square() -> None:
 
     assert safety.in_check
     assert safety.danger & square_bb(Square.G8)
+
+
+def test_bishop_check_evasion_mask_includes_interposing_squares() -> None:
+    board = Board.from_simple_fen("4k3/8/8/8/1b6/8/8/4K3 w")
+    safety = KingSafety.for_color(board, Color.WHITE)
+
+    assert safety.in_check
+    assert safety.checkers & square_bb(Square.B4)
+    assert safety.evasion_mask & square_bb(Square.C3)
+    assert safety.evasion_mask & square_bb(Square.D2)
+    assert safety.evasion_mask & square_bb(Square.B4)
+
+
+def test_queen_diagonal_check_evasion_mask() -> None:
+    board = Board.from_simple_fen("4k3/8/6Q1/8/8/8/8/4K3 w")
+    safety = KingSafety.for_color(board, Color.BLACK)
+
+    assert safety.in_check
+    assert safety.checkers & square_bb(Square.G6)
+    assert safety.evasion_mask & square_bb(Square.F7)
+    assert safety.evasion_mask & square_bb(Square.G6)
+
+
+def test_pawn_check_evasion_mask_is_checker_square_only() -> None:
+    board = Board.from_simple_fen("8/8/8/8/8/8/7p/6K1 w")
+    safety = KingSafety.for_color(board, Color.WHITE)
+
+    assert safety.in_check
+    assert safety.checkers & square_bb(Square.H2)
+    assert safety.evasion_mask == square_bb(Square.H2)
+
+
+def test_danger_includes_enemy_king_attacks() -> None:
+    board = Board.from_simple_fen("8/8/8/8/4k3/8/8/4K3 w")
+    safety = KingSafety.for_color(board, Color.WHITE)
+
+    assert safety.danger & square_bb(Square.D3)
+    assert not (safety.danger & square_bb(Square.E1))
+
+
+def test_danger_includes_enemy_pawn_attacks() -> None:
+    board = Board.from_simple_fen("8/8/8/8/3p4/8/8/4K3 w")
+    safety = KingSafety.for_color(board, Color.WHITE)
+
+    assert safety.danger & square_bb(Square.C3)
+    assert safety.danger & square_bb(Square.E3)
+
+
+def test_for_color_raises_when_king_missing() -> None:
+    board = Board.from_simple_fen("8/8/8/8/8/8/8/4K3 w")
+    with pytest.raises(ValueError, match="No black king"):
+        KingSafety.for_color(board, Color.BLACK)
+
+
+def test_pin_ray_includes_pinner_square() -> None:
+    board = Board.from_simple_fen("4k3/4q3/8/8/8/8/4B3/4K3 w")
+    safety = KingSafety.for_color(board, Color.WHITE)
+
+    assert safety.pin_rays[Square.E2] & square_bb(Square.E7)

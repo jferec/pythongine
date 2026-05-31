@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 from bitboard import KING_ATTACKS, KNIGHT_ATTACKS, iter_squares, square_bb
+from king_safety import KingSafety
 from move import Move, MoveFlag
 from pieces import Color, Piece, PieceKind, Square
 
@@ -72,14 +73,27 @@ _PIECE_TO_FEN = {
 _BISHOP_DELTAS = ((1, 1), (1, -1), (-1, 1), (-1, -1))
 _ROOK_DELTAS = ((0, 1), (0, -1), (1, 0), (-1, 0))
 
+_CASTLE_KINGSIDE_DESTINATIONS = square_bb(Square.G1) | square_bb(Square.G8)
+_CASTLE_QUEENSIDE_DESTINATIONS = square_bb(Square.C1) | square_bb(Square.C8)
+
+
+@dataclass
+class _UndoState:
+    """Snapshot needed to reverse a single ``make_move`` call."""
+
+    move: Move
+    moving_color: Color
+    captured_piece: Piece | None
+    captured_square: Square | None
+    previous_castling_rights: int
+    previous_en_passant_target: Square | None
+    rook_from: Square | None = None
+    rook_to: Square | None = None
+
 
 @dataclass
 class Board:
-    """Chess position with pseudo-legal move generation.
-
-    Piece placement is stored per square; move generation does not yet filter
-    for check, pins, or king safety.
-    """
+    """Chess position with legal move generation."""
 
     width: int = 8
     height: int = 8
@@ -101,6 +115,9 @@ class Board:
 
     _squares: list[Piece | None] = field(init=False, repr=False)
     """Internal piece list indexed by ``Square.board_index``."""
+
+    _undo_stack: list[_UndoState] = field(default_factory=list, repr=False)
+    """Undo records for ``unmake_move``; not cleared by ``generate_moves``."""
 
     def __post_init__(self) -> None:
         """Allocate squares and optionally set up the standard start position."""
@@ -190,11 +207,29 @@ class Board:
         return f"{'/'.join(fen_ranks)} {active}"
 
     def generate_moves(self) -> list[Move]:
-        """Return all pseudo-legal moves for ``side_to_move``.
+        """Return all legal moves for ``side_to_move``.
 
-        Includes promotions, castling, and en passant when state allows.
-        Does not filter moves that leave the king in check.
+        Filters pseudo-legal moves with ``KingSafety`` masks; en passant is
+        additionally validated by applying the move and checking for check.
         """
+        safety = KingSafety.for_color(self, self.side_to_move)
+        moves: list[Move] = []
+        for square in Square:
+            piece = self[square]
+            if piece is None or piece.color != self.side_to_move:
+                continue
+            destinations = self._legal_moves_bb(square, piece, safety)
+            for destination in iter_squares(destinations):
+                for move in self._moves_for_destination(square, destination, piece):
+                    if move.flags == MoveFlag.EN_PASSANT:
+                        if self._is_legal_en_passant(move, safety):
+                            moves.append(move)
+                    else:
+                        moves.append(move)
+        return moves
+
+    def _generate_pseudo_legal_moves(self) -> list[Move]:
+        """Return pseudo-legal moves without king-safety filtering."""
         moves: list[Move] = []
         for square in Square:
             piece = self[square]
@@ -204,6 +239,206 @@ class Board:
             for destination in iter_squares(destinations):
                 moves.extend(self._moves_for_destination(square, destination, piece))
         return moves
+
+    def make_move(self, move: Move) -> None:
+        """Apply ``move`` for ``side_to_move`` and push an undo record."""
+        color = self.side_to_move
+        piece = self[move.from_square]
+        if piece is None or piece.color != color:
+            raise ValueError(f"Illegal move: no {color.name.lower()} piece on {move.from_square}")
+
+        captured_piece: Piece | None = None
+        captured_square: Square | None = None
+        rook_from: Square | None = None
+        rook_to: Square | None = None
+        previous_castling_rights = self.castling_rights
+        previous_en_passant_target = self.en_passant_target
+
+        if move.flags == MoveFlag.EN_PASSANT:
+            captured_square = self._en_passant_captured_square(move)
+            captured_piece = self[captured_square]
+            self[captured_square] = None
+            self[move.to_square] = piece
+            self[move.from_square] = None
+        elif move.flags in (MoveFlag.CASTLE_KINGSIDE, MoveFlag.CASTLE_QUEENSIDE):
+            rook_from, rook_to = self._castle_rook_squares(move, color)
+            rook_piece = self[rook_from]
+            self[move.to_square] = piece
+            self[move.from_square] = None
+            self[rook_to] = rook_piece
+            self[rook_from] = None
+        else:
+            captured_piece = self[move.to_square]
+            if captured_piece is not None:
+                captured_square = move.to_square
+            if move.flags == MoveFlag.PROMOTION:
+                assert move.promotion is not None
+                self[move.to_square] = Piece(move.promotion, color)
+            else:
+                self[move.to_square] = piece
+            self[move.from_square] = None
+
+        self._update_castling_rights(move, piece)
+        self._update_en_passant_target(move, piece, color)
+
+        self._undo_stack.append(
+            _UndoState(
+                move=move,
+                moving_color=color,
+                captured_piece=captured_piece,
+                captured_square=captured_square,
+                previous_castling_rights=previous_castling_rights,
+                previous_en_passant_target=previous_en_passant_target,
+                rook_from=rook_from,
+                rook_to=rook_to,
+            )
+        )
+        self.side_to_move = ~color
+        self.move_history.append(move)
+
+    def unmake_move(self) -> Move:
+        """Revert the most recent ``make_move`` and return the undone move."""
+        if not self._undo_stack:
+            raise ValueError("No move to unmake")
+
+        undo = self._undo_stack.pop()
+        self.move_history.pop()
+        self.side_to_move = undo.moving_color
+        self.castling_rights = undo.previous_castling_rights
+        self.en_passant_target = undo.previous_en_passant_target
+
+        move = undo.move
+        piece = self[move.to_square]
+        if move.flags == MoveFlag.PROMOTION:
+            piece = Piece(PieceKind.PAWN, undo.moving_color)
+        self[move.from_square] = piece
+        self[move.to_square] = None
+
+        if undo.rook_from is not None and undo.rook_to is not None:
+            self[undo.rook_from] = self[undo.rook_to]
+            self[undo.rook_to] = None
+
+        if undo.captured_square is not None:
+            self[undo.captured_square] = undo.captured_piece
+
+        return move
+
+    def _en_passant_captured_square(self, move: Move) -> Square:
+        """Return the square of the pawn removed by an en passant capture."""
+        file_delta = move.to_square.file - move.from_square.file
+        return Square(move.from_square + file_delta)
+
+    def _castle_rook_squares(
+        self, move: Move, color: Color
+    ) -> tuple[Square, Square]:
+        """Return ``(rook_from, rook_to)`` for a castling ``move``."""
+        if color == Color.WHITE:
+            if move.flags == MoveFlag.CASTLE_KINGSIDE:
+                return Square.H1, Square.F1
+            return Square.A1, Square.D1
+        if move.flags == MoveFlag.CASTLE_KINGSIDE:
+            return Square.H8, Square.F8
+        return Square.A8, Square.D8
+
+    def _update_castling_rights(self, move: Move, piece: Piece) -> None:
+        """Clear castling rights affected by ``move``."""
+        color = self.side_to_move
+        if piece.kind == PieceKind.KING:
+            if color == Color.WHITE:
+                self.castling_rights &= ~(
+                    CASTLE_WHITE_KINGSIDE | CASTLE_WHITE_QUEENSIDE
+                )
+            else:
+                self.castling_rights &= ~(
+                    CASTLE_BLACK_KINGSIDE | CASTLE_BLACK_QUEENSIDE
+                )
+
+        if piece.kind == PieceKind.ROOK:
+            if move.from_square == Square.A1:
+                self.castling_rights &= ~CASTLE_WHITE_QUEENSIDE
+            elif move.from_square == Square.H1:
+                self.castling_rights &= ~CASTLE_WHITE_KINGSIDE
+            elif move.from_square == Square.A8:
+                self.castling_rights &= ~CASTLE_BLACK_QUEENSIDE
+            elif move.from_square == Square.H8:
+                self.castling_rights &= ~CASTLE_BLACK_KINGSIDE
+
+        if move.to_square == Square.A1:
+            self.castling_rights &= ~CASTLE_WHITE_QUEENSIDE
+        elif move.to_square == Square.H1:
+            self.castling_rights &= ~CASTLE_WHITE_KINGSIDE
+        elif move.to_square == Square.A8:
+            self.castling_rights &= ~CASTLE_BLACK_QUEENSIDE
+        elif move.to_square == Square.H8:
+            self.castling_rights &= ~CASTLE_BLACK_KINGSIDE
+
+    def _update_en_passant_target(
+        self, move: Move, piece: Piece, color: Color
+    ) -> None:
+        """Set or clear the en passant target after ``move``."""
+        self.en_passant_target = None
+        if piece.kind != PieceKind.PAWN:
+            return
+        forward = 8 if color == Color.WHITE else -8
+        if move.to_square - move.from_square == 2 * forward:
+            self.en_passant_target = Square(move.from_square + forward)
+
+    def _legal_moves_bb(
+        self, from_square: Square, piece: Piece, safety: KingSafety
+    ) -> int:
+        """Legal destination bitboard for ``piece`` on ``from_square``."""
+        pseudo = self._piece_moves_bb(from_square, piece)
+
+        if piece.kind == PieceKind.KING:
+            castle = self._legal_castle_destinations(from_square, piece.color, safety)
+            non_castle = pseudo & ~(_CASTLE_KINGSIDE_DESTINATIONS | _CASTLE_QUEENSIDE_DESTINATIONS)
+            return (non_castle & ~safety.danger) | castle
+
+        if safety.pinned & square_bb(from_square):
+            pseudo &= safety.pin_rays[from_square]
+        if safety.in_check:
+            pseudo &= safety.evasion_mask
+        return pseudo
+
+    def _legal_castle_destinations(
+        self, king_square: Square, color: Color, safety: KingSafety
+    ) -> int:
+        """Return king destination bits for legal castling from ``king_square``."""
+        destinations = 0
+        if king_square == Square.E1 and color == Color.WHITE:
+            if self._white_kingside_castle_bb():
+                transit = square_bb(Square.E1) | square_bb(Square.F1) | square_bb(Square.G1)
+                if not safety.danger & transit:
+                    destinations |= square_bb(Square.G1)
+            if self._white_queenside_castle_bb():
+                transit = square_bb(Square.E1) | square_bb(Square.D1) | square_bb(Square.C1)
+                if not safety.danger & transit:
+                    destinations |= square_bb(Square.C1)
+        elif king_square == Square.E8 and color == Color.BLACK:
+            if self._black_kingside_castle_bb():
+                transit = square_bb(Square.E8) | square_bb(Square.F8) | square_bb(Square.G8)
+                if not safety.danger & transit:
+                    destinations |= square_bb(Square.G8)
+            if self._black_queenside_castle_bb():
+                transit = square_bb(Square.E8) | square_bb(Square.D8) | square_bb(Square.C8)
+                if not safety.danger & transit:
+                    destinations |= square_bb(Square.C8)
+        return destinations
+
+    def _is_legal_en_passant(self, move: Move, safety: KingSafety) -> bool:
+        """Return True if en passant ``move`` leaves the king out of check."""
+        if safety.pinned & square_bb(move.from_square):
+            if not safety.pin_rays[move.from_square] & square_bb(move.to_square):
+                return False
+        if safety.in_check:
+            if not safety.evasion_mask & square_bb(move.to_square):
+                return False
+
+        moving_color = self.side_to_move
+        self.make_move(move)
+        in_check = KingSafety.for_color(self, moving_color).in_check
+        self.unmake_move()
+        return not in_check
 
     def _moves_for_destination(
         self, from_square: Square, to_square: Square, piece: Piece
@@ -234,6 +469,7 @@ class Board:
             piece.kind == PieceKind.PAWN
             and self.en_passant_target is not None
             and to_square == self.en_passant_target
+            and to_square.file != from_square.file
         ):
             return [Move(from_square, to_square, flags=MoveFlag.EN_PASSANT)]
 
@@ -259,6 +495,7 @@ class Board:
             piece.kind == PieceKind.PAWN
             and self.en_passant_target is not None
             and to_square == self.en_passant_target
+            and to_square.file != from_square.file
         )
 
     def _piece_moves_bb(self, square: Square, piece: Piece) -> int:
