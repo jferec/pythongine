@@ -75,27 +75,52 @@ _ROOK_DELTAS = ((0, 1), (0, -1), (1, 0), (-1, 0))
 
 @dataclass
 class Board:
-    width: int = 8
-    height: int = 8
-    setup_standard_position: bool = True
-    side_to_move: Color = Color.WHITE
-    castling_rights: int = CASTLE_ALL
-    en_passant_target: Square | None = None
-    move_history: list[Move] = field(default_factory=list)
-    _squares: list[Piece | None] = field(init=False, repr=False)
+    """Chess position with pseudo-legal move generation.
 
-    def __post_init__(self):
+    Piece placement is stored per square; move generation does not yet filter
+    for check, pins, or king safety.
+    """
+
+    width: int = 8
+    """Board width in squares (always 8 for standard chess)."""
+
+    height: int = 8
+    """Board height in squares (always 8 for standard chess)."""
+
+    setup_standard_position: bool = True
+    """When True, ``__post_init__`` fills the board with the usual start array."""
+
+    side_to_move: Color = Color.WHITE
+    """Color allowed to play next; used by ``generate_moves`` and simple FEN."""
+
+    castling_rights: int = CASTLE_ALL
+    """Bitmask of remaining castling rights (``CASTLE_*`` constants, KQkq)."""
+
+    en_passant_target: Square | None = None
+    """Square behind a pawn that just moved two ranks; ``None`` if unavailable."""
+
+    move_history: list[Move] = field(default_factory=list)
+    """Played moves in order; populated by ``make_move`` (not ``generate_moves``)."""
+
+    _squares: list[Piece | None] = field(init=False, repr=False)
+    """Internal piece list indexed by ``Square.board_index``."""
+
+    def __post_init__(self) -> None:
+        """Allocate squares and optionally set up the standard start position."""
         self._squares = [None] * (self.width * self.height)
         if self.setup_standard_position:
             self.__initialize_board()
 
     def __getitem__(self, square: Square) -> Piece | None:
+        """Return the piece on ``square``, or ``None`` if the square is empty."""
         return self._squares[square.board_index]
 
     def __setitem__(self, square: Square, value: Piece | None) -> None:
+        """Place ``value`` on ``square`` (``None`` clears the square)."""
         self._squares[square.board_index] = value
 
     def __initialize_board(self) -> None:
+        """Place white and black pieces in the standard starting formation."""
         back_rank = [
             PieceKind.ROOK,
             PieceKind.KNIGHT,
@@ -120,6 +145,11 @@ class Board:
 
     @classmethod
     def from_simple_fen(cls, fen: str) -> "Board":
+        """Build a board from simplified FEN (piece placement and side to move only).
+
+        Example: ``rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w``.
+        Castling rights and en passant are not read from the string; defaults apply.
+        """
         placement, active_color = fen.strip().split()
         board = cls(setup_standard_position=False)
         board.side_to_move = Color.WHITE if active_color == "w" else Color.BLACK
@@ -141,6 +171,7 @@ class Board:
         return board
 
     def to_simple_fen(self) -> str:
+        """Encode piece placement and ``side_to_move`` as simplified FEN."""
         fen_ranks: list[str] = []
         for rank in range(7, -1, -1):
             empty_run = 0
@@ -162,6 +193,11 @@ class Board:
         return f"{'/'.join(fen_ranks)} {active}"
 
     def generate_moves(self) -> list[Move]:
+        """Return all pseudo-legal moves for ``side_to_move``.
+
+        Includes promotions, castling, and en passant when state allows.
+        Does not filter moves that leave the king in check.
+        """
         moves: list[Move] = []
         for square in Square:
             piece = self[square]
@@ -175,6 +211,7 @@ class Board:
     def _moves_for_destination(
         self, from_square: Square, to_square: Square, piece: Piece
     ) -> list[Move]:
+        """Turn one destination bit into one or more ``Move`` values (e.g. four promotions)."""
         if piece.kind == PieceKind.KING and abs(to_square.file - from_square.file) == 2:
             flag = (
                 MoveFlag.CASTLE_KINGSIDE
@@ -209,6 +246,7 @@ class Board:
         return [Move(from_square, to_square, flags=MoveFlag.QUIET)]
 
     def _is_promotion_square(self, square: Square, color: Color) -> bool:
+        """Return True if ``square`` is the back rank for ``color``."""
         if color == Color.WHITE:
             return square.rank == 7
         return square.rank == 0
@@ -216,6 +254,7 @@ class Board:
     def _is_capture(
         self, from_square: Square, to_square: Square, piece: Piece
     ) -> bool:
+        """Return True if the move to ``to_square`` takes an enemy piece (including EP)."""
         target = self[to_square]
         if target is not None and target.color != piece.color:
             return True
@@ -226,6 +265,7 @@ class Board:
         )
 
     def _piece_moves_bb(self, square: Square, piece: Piece) -> int:
+        """Pseudo-legal destination bitboard for ``piece`` on ``square``."""
         match piece.kind:
             case PieceKind.PAWN:
                 return self._pawn_moves_bb(square, piece.color)
@@ -241,6 +281,7 @@ class Board:
                 return self._king_moves_bb(square, piece.color)
 
     def _all_occupied_bb(self) -> int:
+        """Bitboard of all squares that contain any piece."""
         occupied = 0
         for square in Square:
             if self[square] is not None:
@@ -248,6 +289,7 @@ class Board:
         return occupied
 
     def _occupied_bb(self, color: Color) -> int:
+        """Bitboard of squares occupied by pieces of ``color``."""
         occupied = 0
         for square in Square:
             piece = self[square]
@@ -256,12 +298,15 @@ class Board:
         return occupied
 
     def _enemy_bb(self, color: Color) -> int:
+        """Bitboard of squares occupied by the opponent of ``color``."""
         return self._occupied_bb(~color)
 
     def _mask_friendly(self, attacks: int, color: Color) -> int:
+        """Remove attack targets occupied by friendly pieces."""
         return attacks & ~self._occupied_bb(color)
 
     def _pawn_moves_bb(self, square: Square, color: Color) -> int:
+        """Pseudo-legal pawn pushes, captures, and en passant from ``square``."""
         moves = 0
         forward = 8 if color == Color.WHITE else -8
         one_step = square + forward
@@ -292,15 +337,19 @@ class Board:
         return moves
 
     def _knight_moves_bb(self, square: Square, color: Color) -> int:
+        """Pseudo-legal knight leaps from ``square``."""
         return self._mask_friendly(KNIGHT_ATTACKS[square], color)
 
     def _bishop_moves_bb(self, square: Square, color: Color) -> int:
+        """Pseudo-legal bishop rays from ``square``."""
         return self._sliding_moves_bb(square, color, _BISHOP_DELTAS)
 
     def _rook_moves_bb(self, square: Square, color: Color) -> int:
+        """Pseudo-legal rook rays from ``square``."""
         return self._sliding_moves_bb(square, color, _ROOK_DELTAS)
 
     def _queen_moves_bb(self, square: Square, color: Color) -> int:
+        """Pseudo-legal queen moves (bishop and rook rays combined)."""
         return self._bishop_moves_bb(square, color) | self._rook_moves_bb(
             square, color
         )
@@ -308,6 +357,7 @@ class Board:
     def _sliding_moves_bb(
         self, square: Square, color: Color, deltas: tuple[tuple[int, int], ...]
     ) -> int:
+        """Ray-cast along ``deltas`` until blocked by any piece or board edge."""
         moves = 0
         for delta_file, delta_rank in deltas:
             file = square.file + delta_file
@@ -326,6 +376,7 @@ class Board:
         return moves
 
     def _king_moves_bb(self, square: Square, color: Color) -> int:
+        """Pseudo-legal king steps and castling king destinations from ``square``."""
         moves = self._mask_friendly(KING_ATTACKS[square], color)
         if square == Square.E1 and color == Color.WHITE:
             moves |= self._white_kingside_castle_bb()
@@ -336,6 +387,7 @@ class Board:
         return moves
 
     def _white_kingside_castle_bb(self) -> int:
+        """King destination bit (G1) if white O-O is pseudo-legal."""
         if not (self.castling_rights & CASTLE_WHITE_KINGSIDE):
             return 0
         if (
@@ -348,6 +400,7 @@ class Board:
         return 0
 
     def _white_queenside_castle_bb(self) -> int:
+        """King destination bit (C1) if white O-O-O is pseudo-legal."""
         if not (self.castling_rights & CASTLE_WHITE_QUEENSIDE):
             return 0
         if (
@@ -361,6 +414,7 @@ class Board:
         return 0
 
     def _black_kingside_castle_bb(self) -> int:
+        """King destination bit (G8) if black O-O is pseudo-legal."""
         if not (self.castling_rights & CASTLE_BLACK_KINGSIDE):
             return 0
         if (
@@ -373,6 +427,7 @@ class Board:
         return 0
 
     def _black_queenside_castle_bb(self) -> int:
+        """King destination bit (C8) if black O-O-O is pseudo-legal."""
         if not (self.castling_rights & CASTLE_BLACK_QUEENSIDE):
             return 0
         if (
