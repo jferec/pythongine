@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from attacks import attackers_to_square, danger_bb
@@ -40,6 +41,73 @@ def _slider_pins_along_ray(piece: Piece, delta_file: int, delta_rank: int) -> bo
     return False
 
 
+def _iter_ray_squares(
+    from_square: Square, delta_file: int, delta_rank: int
+) -> Iterator[Square]:
+    """Yield squares along a ray starting one step from ``from_square``."""
+    file = from_square.file + delta_file
+    rank = from_square.rank + delta_rank
+    while 0 <= file < 8 and 0 <= rank < 8:
+        yield Square(rank * 8 + file)
+        file += delta_file
+        rank += delta_rank
+
+
+def _occupied_pieces_on_ray(
+    position: Position,
+    from_square: Square,
+    delta_file: int,
+    delta_rank: int,
+    *,
+    max_pieces: int = 2,
+) -> list[tuple[Square, Piece]]:
+    """Return up to ``max_pieces`` occupied squares in ray order from ``from_square``."""
+    pieces: list[tuple[Square, Piece]] = []
+    for square in _iter_ray_squares(from_square, delta_file, delta_rank):
+        piece = position[square]
+        if piece is None:
+            continue
+        pieces.append((square, piece))
+        if len(pieces) >= max_pieces:
+            break
+    return pieces
+
+
+def _pin_line_mask(
+    from_square: Square, delta_file: int, delta_rank: int, through_square: Square
+) -> int:
+    """Return a bitboard of ray squares from ``from_square`` through ``through_square``."""
+    mask = 0
+    for square in _iter_ray_squares(from_square, delta_file, delta_rank):
+        mask |= square_bb(square)
+        if square == through_square:
+            break
+    return mask
+
+
+def _absolute_pin_on_ray(
+    position: Position,
+    king_square: Square,
+    color: Color,
+    delta_file: int,
+    delta_rank: int,
+) -> tuple[Square, int] | None:
+    """Return ``(pinned_square, pin_line)`` when an absolute pin exists on this ray."""
+    pieces = _occupied_pieces_on_ray(position, king_square, delta_file, delta_rank)
+    if len(pieces) != 2:
+        return None
+
+    (friendly_square, friendly), (enemy_square, enemy) = pieces
+    if friendly.color != color or enemy.color == color:
+        return None
+    if not _slider_pins_along_ray(enemy, delta_file, delta_rank):
+        return None
+
+    return friendly_square, _pin_line_mask(
+        king_square, delta_file, delta_rank, enemy_square
+    )
+
+
 def _scan_pins_from_king(
     position: Position, king_square: Square, color: Color
 ) -> tuple[int, tuple[int, ...]]:
@@ -48,43 +116,12 @@ def _scan_pins_from_king(
     pinned = 0
 
     for delta_file, delta_rank in _RAY_DELTAS:
-        file = king_square.file + delta_file
-        rank = king_square.rank + delta_rank
-        pin_line = 0
-
-        while 0 <= file < 8 and 0 <= rank < 8:
-            square = Square(rank * 8 + file)
-            pin_line |= square_bb(square)
-            piece = position[square]
-
-            if piece is None:
-                file += delta_file
-                rank += delta_rank
-                continue
-
-            if piece.color != color:
-                break
-
-            friendly_square = square
-            file += delta_file
-            rank += delta_rank
-            while 0 <= file < 8 and 0 <= rank < 8:
-                square = Square(rank * 8 + file)
-                pin_line |= square_bb(square)
-                piece = position[square]
-
-                if piece is None:
-                    file += delta_file
-                    rank += delta_rank
-                    continue
-
-                if piece.color != color and _slider_pins_along_ray(
-                    piece, delta_file, delta_rank
-                ):
-                    pinned |= square_bb(friendly_square)
-                    pin_rays[friendly_square] = pin_line
-                break
-            break
+        pin = _absolute_pin_on_ray(position, king_square, color, delta_file, delta_rank)
+        if pin is None:
+            continue
+        friendly_square, pin_line = pin
+        pinned |= square_bb(friendly_square)
+        pin_rays[friendly_square] = pin_line
 
     return pinned, tuple(pin_rays)
 
