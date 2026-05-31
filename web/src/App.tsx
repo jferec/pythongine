@@ -46,7 +46,7 @@ export default function App() {
   const [staticEval, setStaticEval] = useState<number | null>(null)
 
   const currentFen = game ? fenAtPly(game, ply) : null
-  const { update, running, error: analysisError, elapsedMs } = useAnalysis(currentFen)
+  const { update, running, error: analysisError, elapsedMs, logs } = useAnalysis(currentFen)
 
   async function handleLoad() {
     setLoading(true)
@@ -208,6 +208,32 @@ export default function App() {
               <Typography color="error" sx={{ mb: 2 }}>
                 {analysisError}
               </Typography>
+            )}
+
+            {logs.length > 0 && (
+              <Box
+                sx={{
+                  mb: 2,
+                  maxHeight: 120,
+                  overflow: 'auto',
+                  bgcolor: 'grey.50',
+                  borderRadius: 1,
+                  p: 1,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                }}
+              >
+                {logs.map((line, index) => (
+                  <Typography
+                    key={`${index}-${line}`}
+                    variant="caption"
+                    component="div"
+                    sx={{ display: 'block' }}
+                  >
+                    {line}
+                  </Typography>
+                ))}
+              </Box>
             )}
 
             <Stack spacing={1}>

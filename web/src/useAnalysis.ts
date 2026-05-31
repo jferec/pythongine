@@ -8,7 +8,8 @@ export function useAnalysis(fen: string | null) {
   const [update, setUpdate] = useState<AnalysisUpdate | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [tick, setTick] = useState(0)
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const [logs, setLogs] = useState<string[]>([])
   const sessionRef = useRef<string | null>(null)
   const sourceRef = useRef<EventSource | null>(null)
   const startedAtRef = useRef<number>(0)
@@ -17,7 +18,9 @@ export function useAnalysis(fen: string | null) {
     if (!running) {
       return
     }
-    const interval = window.setInterval(() => setTick((value) => value + 1), 1000)
+    const interval = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAtRef.current)
+    }, 1000)
     return () => window.clearInterval(interval)
   }, [running])
 
@@ -25,6 +28,8 @@ export function useAnalysis(fen: string | null) {
     if (!fen) {
       setUpdate(null)
       setRunning(false)
+      setElapsedMs(0)
+      setLogs([])
       return
     }
 
@@ -32,14 +37,23 @@ export function useAnalysis(fen: string | null) {
     sessionRef.current = session
     setUpdate(null)
     setError(null)
+    setLogs([])
     setRunning(true)
     startedAtRef.current = Date.now()
+    setElapsedMs(0)
 
     const source = openAnalysisStream(
       fen,
       session,
       (payload) => setUpdate(payload),
-      () => setRunning(false),
+      (message) => setLogs((current) => [...current, message]),
+      (serverElapsedMs) => setElapsedMs(serverElapsedMs),
+      (finalElapsedMs) => {
+        setRunning(false)
+        if (finalElapsedMs > 0) {
+          setElapsedMs(finalElapsedMs)
+        }
+      },
       (message) => {
         setError(message)
         setRunning(false)
@@ -63,10 +77,5 @@ export function useAnalysis(fen: string | null) {
     }
   }, [fen])
 
-  const elapsedMs =
-    update?.elapsed_ms ??
-    (running ? Date.now() - startedAtRef.current : 0)
-  void tick
-
-  return { update, running, error, elapsedMs }
+  return { update, running, error, elapsedMs, logs }
 }

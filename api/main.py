@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Annotated
 
@@ -21,6 +22,11 @@ from api.games import (
 )
 
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 app = FastAPI(title="pythongine analysis API")
 app.add_middleware(

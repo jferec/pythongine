@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import uuid
 from dataclasses import asdict
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 from board import Board
 from eval import evaluate
@@ -57,7 +60,12 @@ class AnalysisSessionManager:
 
         deadline = time.monotonic() + ANALYSIS_TIMEOUT_SECONDS
         updates: list[AnalysisUpdate] = []
+        logs: list[str] = []
         done = threading.Event()
+        started_at = time.monotonic()
+
+        logger.info("Session %s started for fen=%s", session_id, fen)
+        logs.append("Analysis session started")
 
         def run_search() -> None:
             try:
@@ -65,6 +73,7 @@ class AnalysisSessionManager:
                     board,
                     deadline=deadline,
                     on_update=lambda update: updates.append(update),
+                    on_progress=logs.append,
                 )
             finally:
                 done.set()
@@ -73,33 +82,53 @@ class AnalysisSessionManager:
         thread.start()
 
         last_count = 0
+        last_log_count = 0
         while not done.is_set():
             if self._is_cancelled(session_id):
+                logger.info("Session %s cancelled", session_id)
                 yield _sse_event("cancelled", {"session": session_id})
                 return
             if time.monotonic() >= deadline:
                 break
+            while last_log_count < len(logs):
+                message = logs[last_log_count]
+                yield _sse_event("log", {"message": message})
+                last_log_count += 1
             while last_count < len(updates):
                 payload = _update_payload(updates[last_count])
+                logger.info(
+                    "Session %s depth %d (%dms)",
+                    session_id,
+                    payload["depth"],
+                    payload["elapsed_ms"],
+                )
                 yield _sse_event("update", payload)
                 last_count += 1
-            time.sleep(0.05)
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            yield _sse_event("tick", {"elapsed_ms": elapsed_ms})
+            time.sleep(1.0)
 
         thread.join(timeout=1.0)
+        while last_log_count < len(logs):
+            yield _sse_event("log", {"message": logs[last_log_count]})
+            last_log_count += 1
         while last_count < len(updates):
             payload = _update_payload(updates[last_count])
             yield _sse_event("update", payload)
             last_count += 1
 
         if self._is_cancelled(session_id):
+            logger.info("Session %s cancelled", session_id)
             yield _sse_event("cancelled", {"session": session_id})
             return
 
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info("Session %s done in %dms", session_id, elapsed_ms)
         yield _sse_event(
             "done",
             {
                 "session": session_id,
-                "elapsed_ms": int((time.monotonic() - (deadline - ANALYSIS_TIMEOUT_SECONDS)) * 1000),
+                "elapsed_ms": elapsed_ms,
             },
         )
 
